@@ -1,0 +1,17 @@
+{
+  "description": "Hierarchy of Defect Controls: a PreToolUse gate on unchanged identical retries, a PostToolUseFailure reminder, and a no-op in-place edit detector",
+  "hooks": {
+    "PreToolUse": [
+      { "hooks": [ { "type": "command", "command": "python3", "args": ["${CLAUDE_PLUGIN_ROOT}/scripts/hdc_hooks.py", "gate"], "timeout": 10 } ] }
+    ],
+    "PostToolUse": [
+      { "hooks": [ { "type": "command", "command": "python3", "args": ["${CLAUDE_PLUGIN_ROOT}/scripts/hdc_hooks.py", "success"], "timeout": 10 } ] }
+    ],
+    "PostToolUseFailure": [
+      { "hooks": [ { "type": "command", "command": "python3", "args": ["${CLAUDE_PLUGIN_ROOT}/scripts/hdc_hooks.py", "failure"], "timeout": 10, "statusMessage": "Checking for repeated failures" } ] }
+    ],
+    "UserPromptSubmit": [
+      { "hooks": [ { "type": "command", "command": "python3", "args": ["${CLAUDE_PLUGIN_ROOT}/scripts/hdc_hooks.py", "reset"], "timeout": 10 } ] }
+    ]
+  }
+}

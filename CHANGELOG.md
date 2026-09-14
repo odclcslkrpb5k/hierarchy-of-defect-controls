@@ -1,0 +1,19 @@
+# Changelog
+
+Each entry is the response to one adversarial review round; the reviews themselves are in `docs/reviews/`.
+
+## 0.5.1
+
+Round-5 should-fix items. The four perl switch-parsing tests, dropped by mistake in 0.5.0 when the patch tests were rewritten, are restored and mutation-checked (replacing `perl_inplace` with `"i" in tok` fails two of them). Numbers glued to a unit (`5007ms`, `2.5s`, `12kb`) are normalised, so a timeout retry loop now arms the gate; two tests cover it. Stale statements corrected: the component table no longer mentions patch targets, the docstring no longer calls `git status` plumbing, the test header names the right review rounds. Dead `COMPOUND_RE` and an unused test parameter removed.
+
+## 0.5.0
+
+Round-4 blocker: `git apply` and `patch` removed from the no-op detector. The branch's only true positive was an empty patch, since a re-applied patch fails in every form tested and the gate already handles that; its false positives (`--cached`, rename, mode and binary patches, explicit `patch` targets, `git apply` from a subdirectory, after gitignored and out-of-repo targets in earlier rounds) met the package's own removal condition for a narrow gate. Tests now assert that patches are never flagged and that a re-applied patch reaches the gate through the failure path. Also: output with no error-like line signs with its first and last non-decoration lines instead of the first alone; a conditional assertion in the hex-id test replaced with explicit ones; `__pycache__` excluded when the tarball is built.
+
+## 0.4.0
+
+Round-3 blockers: perl and sed switch clusters are parsed so `-Ilib`, `-Mstrict`, `-e` no longer read as `-i` (read-only perl was reported as a no-op and denied on the third run); `git apply` and `patch` now hash the target files parsed from the patch instead of comparing the tree fingerprint (real patches outside git or to gitignored files were reported as no-ops). Should-fix: banner-framed lines and the `Traceback` header are decoration, signatures use the first and last error-like lines (unrelated Python and pytest failures shared a signature; a changed exception did not restart the gate count); compound detection uses shlex punctuation tokens so quoted `|` and `;` in a sed script no longer skip detection; fixtures replaced with captured payloads; README wording on `git status` and on patch targets corrected.
+
+## 0.3.0
+
+Blocking fixes from the round-2 review: `git diff` and `git diff --cached` replaced by `diff-files -p` and `diff-index -p --cached` under `GIT_OPTIONAL_LOCKS=0` (porcelain diff rewrote the index and made concurrent user commits fail on `index.lock`; empty-tree base for unborn `HEAD`). Marker extended with `HEAD` and the edit epoch (fixes by `git checkout` or by Edit to a gitignored file did not reopen the gate). No-op detector rewritten: `sed`/`perl` operands hashed before and after (real edits to gitignored and out-of-repo files were reported as no-ops), compound commands and dry-run flags skipped. Should-fix items: fingerprint computed lazily and outside the lock; signatures skip decoration lines and prefer error-like lines, output-less failures keyed by command word, hex and UUID ids normalised; "previous remedy was too low" removed from the reminder; no-op detector relabelled; documented-gaps list moved out of the test suite into this README; fixtures split into per-event files.

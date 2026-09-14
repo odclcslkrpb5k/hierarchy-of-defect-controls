@@ -1,0 +1,63 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="680" height="460" viewBox="0 0 680 460" role="img" aria-labelledby="t d">
+<title id="t">Hierarchy of Defect Controls</title>
+<desc id="d">An inverted pyramid of five tiers, most effective at the widest top to least effective at the narrowest bottom: Eliminate (the mistake has nowhere to happen), Substitute (swap in something harder to get wrong), Engineer (a deterministic check catches it), Administer (people are asked not to slip), Protect (absorbed downstream). A downward arrow on the left marks the effectiveness scale.</desc>
+<style>
+  text{font-family:ui-sans-serif,system-ui,-apple-system,"Segoe UI",Roboto,"Helvetica Neue",Arial,sans-serif}
+  .h{font-size:22px;font-weight:500;fill:#2C2C2A}
+  .t{font-size:14px;font-weight:500}
+  .s{font-size:12px;font-weight:400}
+  .m{font-size:12px;font-weight:400;fill:#5F5E5A}
+  .scale{stroke:#5F5E5A;stroke-width:1.5;fill:none}
+  .scale{fill:none}
+  .band{stroke-width:1}
+  .teal   .band{fill:#E1F5EE;stroke:#0F6E56} .teal   .t{fill:#085041} .teal   .s{fill:#0F6E56}
+  .green  .band{fill:#EAF3DE;stroke:#3B6D11} .green  .t{fill:#27500A} .green  .s{fill:#3B6D11}
+  .amber  .band{fill:#FAEEDA;stroke:#854F0B} .amber  .t{fill:#633806} .amber  .s{fill:#854F0B}
+  .coral  .band{fill:#FAECE7;stroke:#993C1D} .coral  .t{fill:#712B13} .coral  .s{fill:#993C1D}
+  .red    .band{fill:#FCEBEB;stroke:#A32D2D} .red    .t{fill:#791F1F} .red    .s{fill:#A32D2D}
+  @media (prefers-color-scheme:dark){
+    .h{fill:#D3D1C7}
+    .m{fill:#B4B2A9}
+    .scale{stroke:#B4B2A9}
+    .teal   .band{fill:#085041;stroke:#5DCAA5} .teal   .t{fill:#9FE1CB} .teal   .s{fill:#5DCAA5}
+    .green  .band{fill:#27500A;stroke:#97C459} .green  .t{fill:#C0DD97} .green  .s{fill:#97C459}
+    .amber  .band{fill:#633806;stroke:#EF9F27} .amber  .t{fill:#FAC775} .amber  .s{fill:#EF9F27}
+    .coral  .band{fill:#712B13;stroke:#F0997B} .coral  .t{fill:#F5C4B3} .coral  .s{fill:#F0997B}
+    .red    .band{fill:#791F1F;stroke:#F09595} .red    .t{fill:#F7C1C1} .red    .s{fill:#F09595}
+  }
+</style>
+<text class="h" x="40" y="36">Hierarchy of Defect Controls</text>
+
+<text class="m" x="40" y="94">Most effective</text>
+<line class="scale" x1="150" y1="108" x2="150" y2="378"/>
+<path class="scale" stroke-linecap="round" stroke-linejoin="round" d="M143 369 L150 378 L157 369"/>
+<text class="m" x="40" y="402">Least effective</text>
+
+<g class="teal">
+  <rect class="band" x="193" y="80" width="434" height="56" rx="8"/>
+  <text class="t" x="410" y="102" text-anchor="middle" dominant-baseline="central">Eliminate</text>
+  <text class="s" x="410" y="120" text-anchor="middle" dominant-baseline="central">The mistake has nowhere to happen</text>
+</g>
+<g class="green">
+  <rect class="band" x="228" y="146" width="364" height="56" rx="8"/>
+  <text class="t" x="410" y="168" text-anchor="middle" dominant-baseline="central">Substitute</text>
+  <text class="s" x="410" y="186" text-anchor="middle" dominant-baseline="central">Swap in something harder to get wrong</text>
+</g>
+<g class="amber">
+  <rect class="band" x="263" y="212" width="294" height="56" rx="8"/>
+  <text class="t" x="410" y="234" text-anchor="middle" dominant-baseline="central">Engineer</text>
+  <text class="s" x="410" y="252" text-anchor="middle" dominant-baseline="central">A deterministic check catches it</text>
+</g>
+<g class="coral">
+  <rect class="band" x="298" y="278" width="224" height="56" rx="8"/>
+  <text class="t" x="410" y="300" text-anchor="middle" dominant-baseline="central">Administer</text>
+  <text class="s" x="410" y="318" text-anchor="middle" dominant-baseline="central">People are asked not to slip</text>
+</g>
+<g class="red">
+  <rect class="band" x="333" y="344" width="154" height="56" rx="8"/>
+  <text class="t" x="410" y="366" text-anchor="middle" dominant-baseline="central">Protect</text>
+  <text class="s" x="410" y="384" text-anchor="middle" dominant-baseline="central">Absorbed downstream</text>
+</g>
+
+<text class="m" x="40" y="438">Prefer the highest rung whose cost is proportionate to the defect's blast radius and recurrence.</text>
+</svg>

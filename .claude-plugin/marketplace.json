@@ -1,0 +1,15 @@
+{
+  "name": "hdc",
+  "owner": { "name": "Robert Bullock" },
+  "metadata": { "description": "Hierarchy of Defect Controls: a framework for ranking software fixes, and Claude Code hooks that apply it to Claude's own repeated mistakes." },
+  "plugins": [
+    {
+      "name": "hierarchy-of-defect-controls",
+      "source": "./",
+      "description": "A PreToolUse gate on unchanged identical retries, a repeat-failure reminder, a no-op edit detector, and the Hierarchy of Defect Controls rules as a skill.",
+      "version": "0.5.1",
+      "category": "development",
+      "keywords": ["hooks", "postmortem", "quality", "safety"]
+    }
+  ]
+}
