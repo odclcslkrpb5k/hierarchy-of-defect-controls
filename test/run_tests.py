@@ -627,5 +627,302 @@ class NoGitFallback(Base):
         self.assertEqual((r.returncode, r.stdout), (0, ""))
 
 
+# ------------------------------------------------- indicators (0.6.0)
+
+REPORT = os.path.join(HERE, "..", "scripts", "hdc_report.py")
+sys.path.insert(0, os.path.join(HERE, "..", "scripts"))
+import hdc_hooks  # noqa: E402
+import hdc_report  # noqa: E402
+
+
+def transcript_fixture(version="2.1.270"):
+    """Sanitised excerpt of a captured transcript; see fixtures/README.md."""
+    with open(os.path.join(FIX, f"transcript_{version}.jsonl")) as fh:
+        return [json.loads(ln) for ln in fh if ln.strip()]
+
+
+def entries_of(kind, pred=lambda e: True):
+    return [e for e in transcript_fixture() if e.get("type") == kind and pred(e)]
+
+
+def is_deny_entry(e):
+    c = e["message"]["content"]
+    return isinstance(c, list) and str(c[0].get("content", "")).startswith(hdc_hooks.DENY_PREFIX)
+
+
+def deny_entry(text, is_error=True):
+    e = json.loads(json.dumps(entries_of("user", is_deny_entry)[0]))
+    e["message"]["content"][0]["content"] = text
+    e["message"]["content"][0]["is_error"] = is_error
+    return e
+
+
+def context_entry(text):
+    e = json.loads(json.dumps(entries_of("attachment")[0]))
+    e["attachment"]["content"] = [text]
+    return e
+
+
+def prompt_entry(text="next"):
+    e = json.loads(json.dumps(entries_of("user", lambda e: isinstance(e["message"]["content"], str))[0]))
+    e["message"]["content"] = text
+    return e
+
+
+def tool_use_entry():
+    return json.loads(json.dumps(entries_of("assistant")[0]))
+
+
+class Report(unittest.TestCase):
+    def setUp(self):
+        self.root = tempfile.mkdtemp(prefix="hdc-projects-")
+        self.proj = os.path.join(self.root, hdc_report.encode_project("/repo"))
+        os.makedirs(self.proj)
+
+    def tearDown(self):
+        shutil.rmtree(self.root, ignore_errors=True)
+
+    def put(self, entries, name="s1.jsonl", raw_tail=""):
+        with open(os.path.join(self.proj, name), "w") as fh:
+            for e in entries:
+                fh.write(json.dumps(e) + "\n")
+            fh.write(raw_tail)
+
+    def report(self, *args, env=None):
+        r = subprocess.run([PY, "-B", REPORT, "--projects-dir", self.root, "--project", "/repo", *args],
+                           capture_output=True, text=True, env=env or dict(os.environ, HDC_EVENTS=""))
+        return r
+
+    def data(self, *args):
+        r = self.report("--json", *args)
+        self.assertEqual(r.returncode, 0, r.stderr)
+        return json.loads(r.stdout)
+
+    def test_captured_transcript_counts(self):
+        """Turn 1: `false` reminder then deny (one episode), sed no-op twice
+        then deny (one episode, depth 3, pre-0.4 wording). Turn 2: `false`
+        re-run after the user's message (a deny cleared by a user turn), and
+        its reminder opens a new episode."""
+        self.put(transcript_fixture())
+        d = self.data()
+        self.assertEqual((d["sessions"], d["tool_calls"], d["denies"], d["reminders"], d["noops"]),
+                         (1, 7, 2, 2, 2))
+        self.assertEqual((d["episodes"], d["max_depth"], d["past_gate"], d["cleared_by_user"]),
+                         (3, 3, 0, 1))
+
+    def test_captured_2_1_289_wrapped_deny(self):
+        """Found in the 0.6.0 live run: 2.1.289 stores a deny as
+        "PreToolUse:Bash hook error: <reason>". `sh -c 'exit 1'` fails twice
+        (reminder), then is denied: one episode of depth 2."""
+        entries = transcript_fixture("2.1.289")
+        self.assertTrue(any("hook error: " + hdc_hooks.DENY_PREFIX in json.dumps(e) for e in entries))
+        self.put(entries)
+        d = self.data()
+        self.assertEqual((d["tool_calls"], d["denies"], d["reminders"], d["episodes"], d["max_depth"]),
+                         (3, 1, 1, 1, 2))
+
+    def test_printed_deny_text_is_not_a_deny(self):
+        """Found against real transcripts: a Bash call that printed a
+        captured deny message was counted as a deny."""
+        self.put([prompt_entry(), tool_use_entry(), deny_entry(hdc_hooks.DENY_PREFIX + "Bash(x) has failed 2 times "
+                                             'with the same error ("e")', is_error=False)])
+        self.assertEqual(self.data()["denies"], 0)
+
+    def test_task_notification_is_not_a_turn(self):
+        sig = 'with the same signature: "exit 1:". The Hierarchy'
+        self.put([prompt_entry(), tool_use_entry(), context_entry(f"The Bash tool has now failed 2 times in this session {sig}"),
+                  prompt_entry("<task-notification>\n<task-id>x</task-id>"),
+                  deny_entry(hdc_hooks.DENY_PREFIX + 'Bash(false) has failed 2 times with the same error ("exit 1:")')])
+        d = self.data()
+        self.assertEqual((d["episodes"], d["max_depth"]), (1, 2))
+
+    def test_repeated_denies_continue_past_the_gate(self):
+        deny = deny_entry(hdc_hooks.DENY_PREFIX + 'Bash(false) has failed 2 times with the same error ("exit 1:")')
+        self.put([prompt_entry(), tool_use_entry(), deny, deny, prompt_entry(), deny])
+        d = self.data()
+        self.assertEqual((d["episodes"], d["max_depth"], d["past_gate"]), (2, 2, 1))
+
+    def test_only_a_retry_after_a_user_turn_clears_a_deny(self):
+        call = entries_of("assistant")[2]                 # the `false` the fixture's first deny answers
+        deny = entries_of("user", is_deny_entry)[0]
+        self.assertEqual(call["message"]["content"][0]["id"], deny["message"]["content"][0]["tool_use_id"])
+        self.put([prompt_entry(), call, deny, call, deny])
+        self.assertEqual(self.data()["cleared_by_user"], 0)
+        self.put([prompt_entry(), call, deny, call, deny, prompt_entry(), call])
+        self.assertEqual(self.data()["cleared_by_user"], 1)
+
+    def test_malformed_line_counted_not_fatal(self):
+        self.put(transcript_fixture(), raw_tail='{"type":"user","mess')
+        r = self.report()
+        self.assertEqual(r.returncode, 0, r.stderr)
+        self.assertIn("Malformed transcript lines skipped: 1", r.stdout)
+        self.assertIn("Observed: 1 sessions", r.stdout.splitlines()[1])
+
+    def test_rate_only_from_twenty_episodes(self):
+        rem = 'The Bash tool has now failed 2 times in this session with the same signature: "e". The Hierarchy'
+        self.put([x for _ in range(19) for x in (prompt_entry(), tool_use_entry(), context_entry(rem))])
+        self.assertIsNone(self.data()["rate_per_1000"])
+        self.assertIn("N<20, no rate", self.report().stdout)
+        self.put([x for _ in range(20) for x in (prompt_entry(), tool_use_entry(), context_entry(rem))])
+        rate = self.data()["rate_per_1000"]
+        self.assertAlmostEqual(rate["value"], 1000.0)
+        self.assertLess(rate["ci95"][0], 1000.0)
+        self.assertGreater(rate["ci95"][1], 1000.0)
+
+    def test_poisson_interval(self):
+        lo, hi = hdc_report.poisson_ci(2)
+        self.assertEqual((round(lo, 3), round(hi, 3)), (0.242, 7.225))
+        lo, hi = hdc_report.poisson_ci(0)
+        self.assertEqual((lo, round(hi, 3)), (0.0, 3.689))
+
+    def test_since_filters_by_entry_timestamp(self):
+        self.put(transcript_fixture())
+        self.assertEqual(self.data("--since", "2026-09-15")["sessions"], 0)
+        self.assertEqual(self.data("--since", "2026-09-14")["sessions"], 1)
+
+    def test_subagent_transcripts_counted_separately(self):
+        self.put(transcript_fixture())
+        os.makedirs(os.path.join(self.proj, "s1", "subagents"))
+        self.put(transcript_fixture(), name=os.path.join("s1", "subagents", "agent-a.jsonl"))
+        d = self.data()
+        self.assertEqual((d["sessions"], d["subagents"], d["denies"]), (1, 1, 4))
+
+    def test_unknown_project_fails_loudly(self):
+        r = subprocess.run([PY, "-B", REPORT, "--projects-dir", self.root, "--project", "/nowhere"],
+                           capture_output=True, text=True)
+        self.assertEqual(r.returncode, 2)
+        self.assertIn("no transcripts for /nowhere", r.stderr)
+
+    def test_tier4_section(self):
+        self.put(transcript_fixture())
+        self.assertIn("HDC_EVENTS not set", self.report().stdout)
+        ev = os.path.join(self.root, "events.jsonl")
+        with open(ev, "w") as fh:
+            fh.write(json.dumps({"ts": "2026-09-20T00:00:00Z", "kind": "hook_exception", "version": "0.6.0"}) + "\n")
+        out = self.report(env=dict(os.environ, HDC_EVENTS=ev)).stdout
+        self.assertIn("1 records: hook_exception 1", out)
+        self.assertIn("Zero is not evidence of health", out)
+
+
+class ReportDrift(Base):
+    """The report parses the hooks' own messages back out of transcripts.
+    Feed it what the hooks actually emit today."""
+
+    def test_current_messages_are_parsed(self):
+        self.write("t.sh", "exit 1\n")
+        self.s.run_bash("sh t.sh")
+        _, reminder = self.s.run_bash("sh t.sh")
+        deny = json.loads(hook("gate", self.s.pre("sh t.sh")))["hookSpecificOutput"]["permissionDecisionReason"]
+        _, noop = self.s.run_bash("sed -i 's/zzz/yyy/' x.txt")
+        self.s.run_bash("sed -i 's/zzz/yyy/' x.txt")
+        noop_deny = json.loads(hook("gate", self.s.pre("sed -i 's/zzz/yyy/' x.txt")))[
+            "hookSpecificOutput"]["permissionDecisionReason"]
+        self.assertTrue(hdc_hooks.REMINDER_RE.match(reminder), reminder)
+        self.assertTrue(hdc_hooks.DENY_RE.match(deny), deny)
+        self.assertTrue(hdc_hooks.NOOP_RE.match(noop), noop)
+
+        root = tempfile.mkdtemp(prefix="hdc-projects-")
+        try:
+            proj = os.path.join(root, "p")
+            os.makedirs(proj)
+            with open(os.path.join(proj, "s.jsonl"), "w") as fh:
+                for e in (prompt_entry(), tool_use_entry(), context_entry(reminder), deny_entry(deny),
+                          context_entry(noop), context_entry(noop), deny_entry(noop_deny)):
+                    fh.write(json.dumps(e) + "\n")
+            d = hdc_report.build([proj])
+        finally:
+            shutil.rmtree(root, ignore_errors=True)
+        self.assertEqual((d["denies"], d["reminders"], d["noops"]), (2, 1, 2))
+        self.assertEqual((d["episodes"], d["max_depth"]), (2, 3))
+
+
+class Tier4(Base):
+    def setUp(self):
+        super().setUp()
+        self.events = os.path.join(self.scratch, "events.jsonl")
+        os.environ["HDC_EVENTS"] = self.events
+
+    def tearDown(self):
+        os.environ.pop("HDC_EVENTS", None)
+        super().tearDown()
+
+    def records(self):
+        if not os.path.exists(self.events):
+            return []
+        with open(self.events) as fh:
+            return [json.loads(ln) for ln in fh]
+
+    def broken_success(self, env=None):
+        """`success` with scratchpad_dir pointing at a file: State() raises."""
+        blocker = os.path.join(self.scratch, "not-a-dir")
+        open(blocker, "w").close()
+        p = self.s.base("post_tool_use", tool_name="Bash", tool_input={"command": "secret-cmd"},
+                        tool_use_id="toolu_x", tool_response={}, scratchpad_dir=blocker)
+        # Timeout so a blocking write fails this test instead of hanging the suite.
+        return subprocess.run([PY, SCRIPT, "success"], input=json.dumps(p), capture_output=True, text=True,
+                              check=False, env=env or os.environ, timeout=5).stdout
+
+    def test_off_by_default(self):
+        env = dict(os.environ)
+        env.pop("HDC_EVENTS")
+        self.assertEqual(self.broken_success(env=env), "")
+        self.assertEqual(self.records(), [])
+
+    def test_swallowed_exception_is_recorded(self):
+        self.assertEqual(self.broken_success(), "")       # session still sees nothing
+        (r,) = self.records()
+        self.assertEqual((r["kind"], r["mode"], r["exc_type"], r["session_id"]),
+                         ("hook_exception", "success", "NotADirectoryError", self.s.sid))
+        self.assertEqual((r["version"], r["schema"], r["threshold"]),
+                         (hdc_hooks.VERSION, hdc_hooks.SCHEMA, hdc_hooks.THRESHOLD))
+        self.assertEqual(r["func"], "__enter__")
+        self.assertNotIn("secret-cmd", json.dumps(r))
+        self.assertEqual(os.stat(self.events).st_mode & 0o777, 0o600)
+
+    def test_corrupt_state_is_recorded_and_healed(self):
+        with open(os.path.join(self.scratch, f"hdc-state-{self.s.sid}.json"), "w") as fh:
+            fh.write("{truncated")
+        self.s.reset()
+        self.assertEqual([(r["kind"], r["session_id"]) for r in self.records()],
+                         [("state_corrupt", self.s.sid)])
+        self.s.reset()
+        self.assertEqual(len(self.records()), 1)          # rewritten whole
+
+    def test_fifo_target_never_blocks_and_deny_survives(self):
+        os.mkfifo(self.events)
+        t = time.time()
+        self.broken_success()
+        self.assertLess(time.time() - t, 2)
+        self.arm()
+        self.assertEqual(self.s.run_bash("sh t.sh"), ("DENIED", ""))
+
+    def test_relative_path_ignored(self):
+        env = dict(os.environ, HDC_EVENTS="events.jsonl")
+        self.broken_success(env=env)
+        self.assertFalse(os.path.exists(os.path.join(self.dir, "events.jsonl")))
+        self.assertFalse(os.path.exists("events.jsonl"))
+
+    def test_parallel_appends_stay_whole(self):
+        threads = [threading.Thread(target=self.broken_success) for _ in range(13)]
+        for th in threads:
+            th.start()
+        for th in threads:
+            th.join()
+        self.assertEqual(len(self.records()), 13)         # each line parsed
+
+    def test_normal_operation_writes_nothing(self):
+        self.arm()
+        self.s.run_bash("sh t.sh")
+        self.s.reset()
+        self.assertEqual(self.records(), [])
+
+    def test_version_matches_manifests(self):
+        root = os.path.join(HERE, "..", ".claude-plugin")
+        with open(os.path.join(root, "plugin.json")) as fh:
+            self.assertEqual(json.load(fh)["version"], hdc_hooks.VERSION)
+        with open(os.path.join(root, "marketplace.json")) as fh:
+            self.assertEqual(json.load(fh)["plugins"][0]["version"], hdc_hooks.VERSION)
+
+
 if __name__ == "__main__":
     unittest.main(verbosity=1)
