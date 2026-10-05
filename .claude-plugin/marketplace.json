@@ -7,7 +7,7 @@
       "name": "hierarchy-of-defect-controls",
       "source": "./",
       "description": "A PreToolUse gate on unchanged identical retries, a repeat-failure reminder, a no-op edit detector, and the Hierarchy of Defect Controls rules as a skill.",
-      "version": "0.5.1",
+      "version": "0.6.0",
       "category": "development",
       "keywords": ["hooks", "postmortem", "quality", "safety"]
     }

@@ -26,6 +26,10 @@ file per session with per-agent failure counts.
 
   fingerprint  Prints the current working-tree fingerprint. Debug aid.
 
+Tier 4 log: when HDC_EVENTS names an absolute path, a swallowed exception
+and a corrupt state file each append one JSON line there (no command or
+error text). Unset, nothing is written. See docs/indicators.md.
+
 "Nothing changed" is a marker with three parts, any of which reopens the
 gate when it changes: a working-tree fingerprint (git plumbing: status,
 diff-files, diff-index, so tracked and non-ignored files), the HEAD commit
@@ -65,8 +69,13 @@ import re
 import shlex
 import subprocess
 import sys
+import stat
 import tempfile
+import time
+import traceback
 
+VERSION = "0.6.0"        # keep equal to .claude-plugin/plugin.json
+SCHEMA = 1               # HDC_EVENTS record format
 THRESHOLD = 2            # identical failures before the reminder and gate act
 MAX_FINGERPRINT = 160    # chars of normalised error kept for hashing
 GIT_TIMEOUT = 3          # seconds per git call
@@ -77,6 +86,18 @@ ERRORISH_RE = re.compile(r"error|fail|exception|fatal|traceback|panic|denied|ref
 DECORATION_RE = re.compile(r"^[\s=\-_*#~+.|/\\<>\u2500-\u257f]*$")
 BANNER_RE = re.compile(r"^\s*[=\-_*#~]{3,}\s.*\s[=\-_*#~]{3,}\s*$")   # "=== FAILURES ==="
 SKIP_LINES = {"traceback (most recent call last):"}
+
+# Message text the report (scripts/hdc_report.py) parses back out of
+# transcripts. Defined once here so the two cannot drift.
+DENY_PREFIX = "Blocked by the Hierarchy of Defect Controls gate: "
+DENY_RE = re.compile(re.escape(DENY_PREFIX)
+                     + r'(?P<desc>.+?) has failed (?P<n>\d+) times with the same error \("(?P<sig>.*?)"\)', re.S)
+REMINDER_RE = re.compile(r'^The (?P<tool>\S+) tool has now failed (?P<n>\d+) times in this session '
+                         r'with the same signature: "(?P<sig>.*)"\. The Hierarchy', re.S)
+NOOP_TEXT = "reported success but its target is byte-identical"
+NOOP_RE = re.compile(r"^(?P<desc>.+?) reported success but "
+                     r"(?:its target is byte-identical|the working tree is unchanged)", re.S)  # second: <=0.3
+NOOP_SIG = "no-op in-place edit: target unchanged"   # "...: working tree unchanged" in <=0.3
 
 try:
     import fcntl  # POSIX only
@@ -350,6 +371,43 @@ def marker_for(payload: dict, edit_epoch: int, tree=None) -> str:
     return f"git:{fp}:{head}:e{edit_epoch}" if fp else f"nogit:e{edit_epoch}"
 
 
+# ----------------------------------------------------------- tier 4 log
+
+MAX_EVENT = 4096         # bytes per record; one os.write, so appends do not interleave
+
+
+def log_event(kind: str, session_id=None, **fields) -> None:
+    """Append one Tier 4 record to $HDC_EVENTS. Opt-in, best-effort, and
+    never able to block: the path must be absolute and a regular file (or
+    not exist yet), and the open is non-blocking, so a FIFO or a stale
+    mount cannot hold a hook until its timeout."""
+    path = os.environ.get("HDC_EVENTS")
+    if not path:
+        return
+    try:
+        if not os.path.isabs(path):
+            return
+        try:
+            if not stat.S_ISREG(os.stat(path).st_mode):
+                return
+        except FileNotFoundError:
+            pass
+        rec = {"ts": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()), "schema": SCHEMA,
+               "version": VERSION, "threshold": THRESHOLD, "kind": kind,
+               "session_id": str(session_id or "unknown")}
+        rec.update(fields)
+        line = (json.dumps(rec, separators=(",", ":")) + "\n").encode("utf-8")
+        if len(line) > MAX_EVENT:
+            return
+        fd = os.open(path, os.O_WRONLY | os.O_APPEND | os.O_CREAT | os.O_NONBLOCK, 0o600)
+        try:
+            os.write(fd, line)
+        finally:
+            os.close(fd)
+    except Exception:  # noqa: BLE001
+        pass
+
+
 # ------------------------------------------------------------------ state
 
 def state_path(payload: dict) -> str:
@@ -363,6 +421,11 @@ def _fresh():
     return {"edit_epoch": 0, "agents": {}, "pending": {}}
 
 
+def _sid_of(path: str) -> str:
+    name = os.path.basename(path)
+    return name[len("hdc-state-"):-len(".json")] if name.startswith("hdc-state-") else name
+
+
 def peek_state(path: str) -> dict:
     """Unlocked read. Writers replace the file atomically, so a reader sees
     a complete file; it may be a moment stale, which the callers tolerate."""
@@ -373,7 +436,10 @@ def peek_state(path: str) -> dict:
             for k, v in _fresh().items():
                 data.setdefault(k, v)
             return data
-    except (OSError, ValueError):
+        log_event("state_corrupt", _sid_of(path))
+    except ValueError:
+        log_event("state_corrupt", _sid_of(path))
+    except OSError:
         pass
     return _fresh()
 
@@ -486,7 +552,7 @@ def mode_gate(payload: dict) -> None:
             return
 
     reason = (
-        f"Blocked by the Hierarchy of Defect Controls gate: {call['desc']} has "
+        f"{DENY_PREFIX}{call['desc']} has "
         f"failed {call['count']} times with the same error "
         f"(\"{call.get('sig') or 'unknown'}\") and nothing has changed since "
         "the last failure: no file edit, no working-tree change, no new "
@@ -539,11 +605,10 @@ def mode_success(payload: dict) -> None:
         ck = canonical_call(tool, tool_input)
         if noop:
             marker = marker_for(payload, st.data["edit_epoch"], tree)
-            sig = "no-op in-place edit: target unchanged"
+            sig = NOOP_SIG
             _, call = record_failure(st.data, payload, sig, describe_call(tool, tool_input), marker)
             out = {"hookSpecificOutput": {"hookEventName": "PostToolUse", "additionalContext": (
-                f"{call['desc']} reported success but its target is byte-identical "
-                "afterwards: the replacement matched nothing. Recorded as failure "
+                f"{call['desc']} {NOOP_TEXT} afterwards: the replacement matched nothing. Recorded as failure "
                 f"{call['count']} of this call.")}}
         else:
             agent_of(st.data, agent_key(payload))["calls"].pop(ck, None)
@@ -568,16 +633,24 @@ MODES = {"gate": mode_gate, "failure": mode_failure, "success": mode_success,
 
 
 def main() -> int:
+    mode = sys.argv[1] if len(sys.argv) > 1 else ""
+    payload = {}
     try:
-        fn = MODES.get(sys.argv[1] if len(sys.argv) > 1 else "")
+        fn = MODES.get(mode)
         if fn is None:
             return 0
         raw = sys.stdin.read()
         payload = json.loads(raw) if raw.strip() else {}
         if isinstance(payload, dict):
             fn(payload)
-    except Exception:  # noqa: BLE001
-        pass
+    except Exception as exc:  # noqa: BLE001
+        # Still exit 0 and say nothing to the session; the record is the
+        # only trace. Innermost frame in this file, not in the stdlib.
+        here = [f for f in traceback.extract_tb(exc.__traceback__)
+                if os.path.abspath(f.filename) == os.path.abspath(__file__)]
+        log_event("hook_exception", payload.get("session_id") if isinstance(payload, dict) else None,
+                  mode=mode, exc_type=type(exc).__name__,
+                  func=here[-1].name if here else None, lineno=here[-1].lineno if here else None)
     return 0
 
 
