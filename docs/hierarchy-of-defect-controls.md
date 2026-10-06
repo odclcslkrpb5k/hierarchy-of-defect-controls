@@ -96,3 +96,4 @@ The ladder applies to an agent's own mistakes the same way. When a coding agent 
 - **Secure by Design** (CISA, OWASP): the same layering applied to vulnerabilities
 - **Swiss cheese model** (Reason): often confused with this; it explains how failures pass through layers rather than ranking which layers to build
 - **Layer of Protection Analysis** (CCPS): which layers deserve credit at all. Its qualitative half, independence above all, is applied to agent work in [protection-layers.md](protection-layers.md)
+- **HAZOP** (ICI, IEC 61882): how process safety finds scenarios in the first place. Tested against this repo's own review history and not adopted; [hazop.md](hazop.md) records why

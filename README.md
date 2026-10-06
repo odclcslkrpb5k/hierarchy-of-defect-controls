@@ -57,7 +57,7 @@ Five rounds of adversarial review by a separate Claude Code session, each run ag
     hooks/hooks.json    four hooks wired to scripts/hdc_hooks.py
     scripts/            hdc_hooks.py (the hooks) and hdc_report.py (indicators); no dependencies
     skills/             the rules as a Claude Code skill
-    docs/               framework, CLAUDE.md, plugin reference, indicators, protection layers, evidence, the SVG, reviews
+    docs/               framework, CLAUDE.md, plugin reference, indicators, protection layers, HAZOP decision, evidence, the SVG, reviews
     test/               test suite and captured fixtures
 
 ## License

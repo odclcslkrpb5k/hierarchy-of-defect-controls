@@ -73,7 +73,7 @@ import stat
 import tempfile
 import time
 
-VERSION = "0.7.1"        # keep equal to .claude-plugin/plugin.json
+VERSION = "0.7.2"        # keep equal to .claude-plugin/plugin.json
 SCHEMA = 1               # HDC_EVENTS record format
 THRESHOLD = 2            # identical failures before the reminder and gate act
 MAX_FINGERPRINT = 160    # chars of normalised error kept for hashing

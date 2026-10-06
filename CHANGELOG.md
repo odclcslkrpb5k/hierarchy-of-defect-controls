@@ -2,6 +2,10 @@
 
 Each entry is the response to one adversarial review round; the reviews themselves are in `docs/reviews/`.
 
+## 0.7.2
+
+HAZOP tested and not adopted (`docs/hazop.md`, evidence in `docs/evidence/hazop-retrodiction/`). It was the candidate for the step the repo lacks, finding scenarios before judging their safeguards. In a retrodiction test, two HAZOP desk studies and two plain expert reviews of the v0.1.0 design (same model, materials and effort) were scored by a blind judge against the 76 findings of review rounds 1 to 7. HAZOP matched as many or fewer of round 1's 18 findings (13 and 11, against 13 and 13), leaned toward more new findings, and produced all three incorrect ones. Both arms shared one blind spot, what Claude Code actually delivers to which hook, which only round 1's live payload logging had established. Kept: observation before documentation, guide words as a brainstorming checklist whose candidates must be observable, and three findings no review had caught (`is_interrupt` ignored; the temp-directory state fallback keeps command text and is never cleaned; error text quoted unfiltered into hook messages), which hold for the current code by reading and are not yet fixed. No hook behaviour changed.
+
 ## 0.7.1
 
 Round-7 fixes; the review's verdict was ship after fixes, and all of them are in `docs/protection-layers.md`. No hook behaviour changed.

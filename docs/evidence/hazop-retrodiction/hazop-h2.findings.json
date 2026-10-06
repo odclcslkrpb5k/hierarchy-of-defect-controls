@@ -1,0 +1,182 @@
+[
+  {
+    "id": "F1",
+    "component": "scripts/hdc_hooks.py canonical_call / IGNORED_INPUT_FIELDS; PreToolUse gate",
+    "problem": "A call that failed by timing out and is retried with a longer timeout is treated as an unchanged call and denied. The `timeout` and `run_in_background` fields are stripped from the call key, so the two legitimate remedies for a timeout (raise the timeout, run in the background) look identical to the failed call.",
+    "scenario": "Bash `npm test` with timeout 120000 is killed by the timeout twice (Claude Code reports a timeout as a tool failure). Claude retries `npm test` with timeout 600000. The gate computes the same key, sees count 2 and no edit since, and denies with 'Change the code, the input, or the approach first', although the input was changed.",
+    "consequence": "Legitimate recovery from a slow command is blocked; the only way through is an unrelated file edit or a cosmetic change to the command, both of which the plugin otherwise treats as abuse.",
+    "evidence": "scripts/hdc_hooks.py:64 (IGNORED_INPUT_FIELDS includes timeout and run_in_background), scripts/hdc_hooks.py:72, scripts/hdc_hooks.py:221-227; README.md:34 promises that a changed input is a different call",
+    "confidence": "high"
+  },
+  {
+    "id": "F2",
+    "component": "scripts/hdc_hooks.py mode_failure; is_interrupt field",
+    "problem": "User interrupts are counted as failures of the agent. Claude Code fires the failure event with `is_interrupt: true` when the user presses Escape during a tool call; the script never reads that field and increments both the call count and the signature count.",
+    "scenario": "The user interrupts a long `pytest` run twice to give new instructions, then says 'ok, run the tests now'. The third identical `pytest` call is denied with 'has failed 2 times in this session and no file has been edited since the last failure'. If the interrupt error text is stable, the second interrupt also produces a reminder that the tool 'failed 2 times with the same signature'.",
+    "consequence": "A direct user instruction is refused and the agent is told a false story about its own repeated failure; the user has to edit a file or the agent has to vary the command to proceed.",
+    "evidence": "scripts/hdc_hooks.py:166-177 (unconditional increment), no reference to is_interrupt anywhere in scripts/hdc_hooks.py; test/run_tests.sh has no interrupt case",
+    "confidence": "high"
+  },
+  {
+    "id": "F3",
+    "component": "scripts/hdc_hooks.py mode_success / mode_failure; PostToolUse vs PostToolUseFailure",
+    "problem": "Failures whose exit status is masked are invisible to both controls, and the success path then erases any earlier count for that call. A command piped to `tail`/`head`/`grep`, suffixed with `|| true` or `; echo done`, or launched with `run_in_background` exits 0 (or reports success at launch), so Claude Code fires the success event, which pops the call's count.",
+    "scenario": "Claude runs `pytest tests/ 2>&1 | tail -40` repeatedly while the same test keeps failing. Each run exits 0 (tail's status). No failure event fires, the gate never arms, no reminder fires. Worse: if the bare `pytest tests/` had already failed twice and is now denied, nothing stops the piped form, and if `pytest tests/` itself is later run in a form that exits 0 its count is cleared.",
+    "consequence": "The most common way an agent runs tests defeats the plugin entirely. The README acknowledges exit-0 wrong answers in general but not that routine piping/backgrounding of the very command being looped on makes the loop undetectable.",
+    "evidence": "scripts/hdc_hooks.py:200-207 (success pops the key), scripts/hdc_hooks.py:64 (run_in_background ignored in key), README.md:45",
+    "confidence": "high"
+  },
+  {
+    "id": "F4",
+    "component": "scripts/hdc_hooks.py EDIT_TOOLS / mode_success edit_epoch; gate deny reason",
+    "problem": "The 'has anything changed' marker only observes four named tools. Files changed by Bash (`sed -i`, `git checkout`, `git stash pop`, `git pull`, `npm install`, `pip install`, `make`, a formatter run by a failing pre-commit hook), by a background process, by an MCP editing tool, or by the user in their own editor do not reopen the gate.",
+    "scenario": "A `git commit` fails twice because a pre-commit formatter rewrites files each time (a common, legitimate pattern). Claude runs `git add -A` and `git commit -m ...` a third time: denied, 'no file has been edited since the last failure', although files changed twice. Variant: the user fixes a config in VS Code and says 'run it again'; Claude's identical call is refused and the deny text tells it to change the input instead.",
+    "consequence": "Legitimate retries after real changes are blocked, the reason given is factually wrong, and the user's explicit instruction is overridden. The deny text steers the agent to vary the command, which teaches the bypass in F20.",
+    "evidence": "scripts/hdc_hooks.py:40 (EDIT_TOOLS), scripts/hdc_hooks.py:210-211, scripts/hdc_hooks.py:231-232 (reason asserts 'no file has been edited'), README.md:9, README.md:39",
+    "confidence": "high"
+  },
+  {
+    "id": "F5",
+    "component": "scripts/hdc_hooks.py edit_epoch (global); docs/CLAUDE.md NOTES.md procedure",
+    "problem": "Any successful edit of any file, anywhere, reopens the gate for every blocked call: a one-character comment change, a Write to an unrelated scratch file, or a no-op rewrite. In particular the plugin's own rules tell the agent to append a `repeat: ...` line to NOTES.md when it notices a repeat, and that append is a Write/Edit that increments the epoch and unlocks the identical failing call.",
+    "scenario": "`pytest x.py` has failed twice; gate denies. Claude follows docs/CLAUDE.md and appends 'repeat: pytest x.py fails (2026-10-06)' to NOTES.md (a successful Edit). The epoch increments. Claude re-runs the identical `pytest x.py`; the gate lets it through. An agent that merely wants past the gate can do the same with any trivial edit.",
+    "consequence": "The gate's 'only edited past' property is satisfied by edits that cannot have fixed anything, and the plugin's own procedure is one of them. The control is reopened by the behaviour it asks for.",
+    "evidence": "scripts/hdc_hooks.py:210-211 (epoch bumps on any EDIT_TOOLS success, no file scoping), scripts/hdc_hooks.py:226-227, docs/CLAUDE.md:31, docs/CLAUDE.md:29 ('only edited past')",
+    "confidence": "high"
+  },
+  {
+    "id": "F6",
+    "component": "scripts/hdc_hooks.py state_path; subagent hook payloads",
+    "problem": "State is keyed on session_id only. Plugin hooks also run inside subagents, whose payloads carry the parent's session_id plus an agent_id that the script ignores, so the parent and every subagent (including parallel ones) share one set of counts and one edit epoch.",
+    "scenario": "The main agent launches three Explore subagents in parallel; each runs `pytest tests/test_x.py` once and it fails. The pooled count reaches 3; the parent, which has never run that command, is denied on its first attempt with 'has failed 3 times in this session'. Conversely, a subagent writing its own notes file bumps the shared epoch and reopens a gate the parent had legitimately tripped. Two subagents failing on the same call also race on the file (see F7).",
+    "consequence": "False denials and false reopenings that neither the agent nor the user can explain from what they saw; the reminder and deny texts attribute to the agent failures that happened elsewhere.",
+    "evidence": "scripts/hdc_hooks.py:107-111 (path uses session_id only; agent_id never read), scripts/hdc_hooks.py:210-211 (single global epoch); Claude Code docs: plugin hooks run in subagents with the parent's session_id and an agent_id field",
+    "confidence": "high"
+  },
+  {
+    "id": "F7",
+    "component": "scripts/hdc_hooks.py load_state / save_state (no locking, shared .tmp name)",
+    "problem": "Every hook does an unlocked read-modify-write of the session state file, and all writers use the same temporary filename (`<state>.tmp`). Claude Code runs matching hooks in parallel, and parallel tool batches or parallel subagents produce concurrent hook processes.",
+    "scenario": "Two subagents' `pytest` calls fail at the same moment. Both hooks load count 1, both write count 2 via the same .tmp path; one write is lost (count stays 2 instead of 3, acceptable) or the two writes interleave on the shared .tmp and the renamed file is truncated JSON. On the next event load_state catches the ValueError and silently resets the whole session state to zero: counts gone, epoch gone, gate open. Variant: an Edit's success hook and a failing command's hook race and the epoch bump is lost, so the gate stays shut after a real fix.",
+    "consequence": "Silent loss or reset of the only state the controls depend on, in either direction (false allow after a wipe, false deny after a lost epoch bump). Also: a parallel batch containing an Edit and the retry may evaluate the retry's gate before the Edit's success hook runs, producing a spurious deny.",
+    "evidence": "scripts/hdc_hooks.py:114-121 (corrupt file -> {}), scripts/hdc_hooks.py:128-135 (fixed tmp name, no lock), scripts/hdc_hooks.py:170/204/219 (read-modify-write); Claude Code docs: 'All matching hooks run in parallel'",
+    "confidence": "medium"
+  },
+  {
+    "id": "F8",
+    "component": "scripts/hdc_hooks.py mode_failure signature counting; reminder_text escalation",
+    "problem": "Signature counts are only ever incremented. A later success clears the call key but never the signature, and nothing decays by edit epoch. The escalation text ('This is occurrence N; the previous remedy was too low on the ladder') therefore fires on cumulative session totals, long after the earlier failures were genuinely fixed. The call counter has the same property: a call that failed twice early in the session is shut after a single new failure hours later.",
+    "scenario": "At 09:00 `npm test` fails twice with 'exit code 1: ...' (reminder fires, Claude fixes the bug, tests pass). At 15:00 an unrelated change makes `npm test` fail once with a first line that normalises to the same signature. The agent is told 'has now failed 3 times ... This is occurrence 3; the previous remedy was too low on the ladder', and the gate shuts after that one failure.",
+    "consequence": "False accusations that grow all session; the agent either over-reacts (abandons a correct approach) or learns the reminder is noise and ignores it, which also discards the true positives.",
+    "evidence": "scripts/hdc_hooks.py:184-186 (signature increment, no reset), scripts/hdc_hooks.py:207 (success clears calls only), scripts/hdc_hooks.py:158-162 (escalation on count > THRESHOLD), scripts/hdc_hooks.py:224 (cumulative call count)",
+    "confidence": "high"
+  },
+  {
+    "id": "F9",
+    "component": "scripts/hdc_hooks.py normalise_error",
+    "problem": "The signature is the first line of the failure text with all integers masked. For Bash the failure text for a test runner typically begins with a generic banner or the command's first stdout line, and the documented Bash error begins with 'exit code N:'. Different failures therefore collapse into one signature per tool, and the reminder fires on the second failure of any kind.",
+    "scenario": "Session: `pytest a.py` fails (first line 'exit code 1: ===== test session starts ====='), later `pytest b.py` fails for a different reason with the same first line. Second failure: reminder says the Bash tool 'has now failed 2 times in this session with the same signature'. Every later test failure of any kind escalates the occurrence count (see F8).",
+    "consequence": "The reminder's central claim ('same signature') is often untrue, the escalation text becomes a session-long nuisance alarm, and the agent is nudged to classify a non-repeat as a repeat.",
+    "evidence": "scripts/hdc_hooks.py:49 (first line only), scripts/hdc_hooks.py:56 (all digits masked), scripts/hdc_hooks.py:183-193; test/run_tests.sh:19-21 feeds a bare 'E   AssertionError' line that real Bash failures do not start with",
+    "confidence": "medium"
+  },
+  {
+    "id": "F10",
+    "component": "scripts/hdc_hooks.py state_path / save_state",
+    "problem": "The script writes into `scratchpad_dir` as given and never creates it. If the directory is reported but not yet created (or not writable), every save raises OSError, which is swallowed, and no state ever persists.",
+    "scenario": "Early in a session the scratchpad directory has not been created yet (it is created on first use), or it was cleaned by a tmp reaper mid-session. Failures are 'recorded' into a file that is never written; the gate never arms; nothing is logged.",
+    "consequence": "Silent always-pass for the whole session, with no indication to the user or the tests, which only exercise the tempdir fallback.",
+    "evidence": "scripts/hdc_hooks.py:107-111 (no makedirs), scripts/hdc_hooks.py:128-135 (OSError swallowed), test/run_tests.sh:7,17 (payloads carry no scratchpad_dir)",
+    "confidence": "medium"
+  },
+  {
+    "id": "F11",
+    "component": "scripts/hdc_hooks.py main (exit 0 on any exception); hooks/hooks.json (python3 on PATH); no health check",
+    "problem": "Every failure mode of the control itself is silent: python3 missing from Claude Code's PATH (pyenv shim only in the interactive shell, Windows `python`), an exception in the script, an unwritable state directory, a hook timeout. The plugin ships no check that the mechanism fires at all, although its own rules say an unexercised check that fails as silent always-pass is worse than no check. The only verification offered is a manual procedure in the README.",
+    "scenario": "A user installs the plugin on a machine where `python3` resolves only through a shell alias. All three hooks exit non-zero (non-blocking); Claude Code proceeds; the user believes the gate is active. Nothing in the session says otherwise.",
+    "consequence": "The protection is believed present while absent; the plugin fails the standard it sets for controls (docs/CLAUDE.md:7 'an assertion that the mechanism fired at all'; docs/CLAUDE.md:19).",
+    "evidence": "scripts/hdc_hooks.py:25-28 (design choice stated), scripts/hdc_hooks.py:266-268, hooks/hooks.json:9,21,33, README.md:20, README.md:26-28, docs/CLAUDE.md:7, docs/CLAUDE.md:19",
+    "confidence": "medium"
+  },
+  {
+    "id": "F12",
+    "component": ".claude-plugin/plugin.json description",
+    "problem": "The manifest description advertises 'a fresh-context reviewer at Stop'. No Stop hook is wired, and the README explicitly says there is none and that one must not be re-added.",
+    "scenario": "A user reads the description in `/plugin` or a marketplace listing and expects an end-of-turn reviewer; none exists.",
+    "consequence": "Misleading metadata about which controls are present; the description also omits the PreToolUse gate, the plugin's strongest component.",
+    "evidence": ".claude-plugin/plugin.json:4; hooks/hooks.json:3-41 (no Stop entry); README.md:12",
+    "confidence": "high"
+  },
+  {
+    "id": "F13",
+    "component": "README.md, docs/CLAUDE.md, skills/.../SKILL.md, docs/hierarchy-of-defect-controls.md, reminder text",
+    "problem": "The plugin's own texts disagree with each other on the facts they teach. (a) The rung of 'resolve to be more careful': Protect in SKILL.md:27, docs/hierarchy-of-defect-controls.md:86 and the reminder (hdc_hooks.py:151), but Administer in docs/CLAUDE.md:25. (b) The strength of the gate: docs/CLAUDE.md:29 says it 'cannot be talked past, only edited past', while README.md:34 says a different flag is a different call and the deny text tells the agent to vary the call. (c) README.md:45 says 'Both hooks' when three are wired. (d) The gate is labelled Engineer and 'deterministic and narrow' while it is fail-open on every internal error, reopened by any edit, and re-keyed by any cosmetic change, which the docs' own definition of an Engineer control (docs/CLAUDE.md:18-19) does not cover.",
+    "scenario": "A project copies docs/CLAUDE.md as instructed (README.md:14) and also has the skill loaded; the agent receives both classifications of the same remedy and both descriptions of the gate in one context.",
+    "consequence": "The framework's value is consistent labelling; the plugin undermines it in its own files, and users calibrate their trust in the gate on an overstated claim.",
+    "evidence": "skills/hierarchy-of-defect-controls/SKILL.md:27; docs/CLAUDE.md:25; docs/CLAUDE.md:29; docs/CLAUDE.md:18-19; docs/hierarchy-of-defect-controls.md:86; scripts/hdc_hooks.py:151; README.md:7, README.md:34, README.md:45",
+    "confidence": "high"
+  },
+  {
+    "id": "F14",
+    "component": "scripts/hdc_hooks.py reminder_text / gate reason (echo of tool output and command text)",
+    "problem": "Up to 160 characters of the failing tool's output (lower-cased, digits masked) are embedded verbatim in the reminder sent to the agent as additional context, and up to 120 characters of the command text in the deny reason. The script's own comment notes that out-of-band text can trip injection defences, yet raw tool output is still placed in that channel.",
+    "scenario": "A repository under test contains a test whose first failure line is crafted text addressed to the agent (e.g. an instruction to disable the plugin or to run a command). After two failures the hook repeats that text inside a system-side reminder, lending it the authority of the hook.",
+    "consequence": "A small, bounded prompt-injection channel from untrusted tool output into a trusted-looking message; low likelihood, but the mitigation is cheap and the file identifies the risk itself.",
+    "evidence": "scripts/hdc_hooks.py:145-149, scripts/hdc_hooks.py:191, scripts/hdc_hooks.py:97-104 and 230",
+    "confidence": "low"
+  },
+  {
+    "id": "F15",
+    "component": "hooks/hooks.json (no matcher) + PreToolUse gate",
+    "problem": "Every tool is gated, and commands whose non-zero exit is the expected signal are counted as failures: health-check polling (`curl localhost:8080/health`), `grep -q`, `test -f`, `git diff --exit-code`, `diff`, `git commit` with nothing staged, and Read of a file that a background build has not produced yet. Two expected failures lock the third identical attempt until something is edited.",
+    "scenario": "Claude starts a dev server in the background and polls `curl -sf http://localhost:3000/health` while it boots. Attempts 1 and 2 fail (server not up); attempt 3 is denied and the agent is told to 'change the code, the input, or the approach'. Same for `Read` of `build/output.log` while a build runs.",
+    "consequence": "Normal wait-and-retry workflows are blocked exactly when nothing should change; the deny reason then teaches cosmetic variation (F20). The README accepts a false-positive surface but describes it as 'close to the definition of the loop', which polling is not.",
+    "evidence": "hooks/hooks.json:4-15 (no matcher), scripts/hdc_hooks.py:216-227, README.md:46",
+    "confidence": "medium"
+  },
+  {
+    "id": "F16",
+    "component": "scripts/hdc_hooks.py tool_name / tool_input defaults",
+    "problem": "If `tool_name` is absent (renamed in a future payload, or a tool that omits it), the script substitutes 'unknown' and `{}` for the input, so every call in the session hashes to one key. The gate is not fail-open in that case: after any two failures, every tool call, including the Edit calls that could reopen the gate, is denied.",
+    "scenario": "A Claude Code release renames `tool_name`. Two failures of any kind occur. From then on every PreToolUse is denied with 'unknown has failed 2 times'; the agent cannot edit its way out; only disabling the plugin helps.",
+    "consequence": "A session-wide lock-out rather than the intended silent degradation; the README's claim that a renamed field fails as always-pass is wrong for this field.",
+    "evidence": "scripts/hdc_hooks.py:167-168, scripts/hdc_hooks.py:217-221, README.md:26",
+    "confidence": "low"
+  },
+  {
+    "id": "F17",
+    "component": "scripts/hdc_hooks.py state_path fallback to tempfile.gettempdir()",
+    "problem": "On Claude Code versions without `scratchpad_dir` (before v2.1.257) or when the temp directory is unavailable, state is written to the shared system temp directory under a predictable name, with default permissions, and is never deleted. The file contains command lines (the `desc` field, up to 120 characters each).",
+    "scenario": "On a shared development host, `/tmp/hdc-state-<session>.json` files accumulate from every session and are readable by other users; they list the failing commands and file paths the agent used.",
+    "consequence": "Minor information leak and clutter; no cleanup path exists in any version.",
+    "evidence": "scripts/hdc_hooks.py:108, scripts/hdc_hooks.py:131 (no mode), scripts/hdc_hooks.py:174 (desc stored); no SessionEnd hook in hooks/hooks.json",
+    "confidence": "low"
+  },
+  {
+    "id": "F18",
+    "component": "scripts/hdc_hooks.py state lifetime across --resume",
+    "problem": "The state file lives in the session scratchpad, which persists across `--resume`/`--continue` with the same session id. Counts and the edit epoch therefore survive across days, while anything the user changed outside Claude Code in between is invisible to the epoch.",
+    "scenario": "Yesterday `make test` failed twice at the end of a session. Today the user fixes the Makefile by hand and resumes the session; Claude's first `make test` is denied with 'has failed 2 times in this session and no file has been edited since the last failure'.",
+    "consequence": "A stale lock that contradicts the user's knowledge of what changed; the message calls it 'this session'.",
+    "evidence": "scripts/hdc_hooks.py:107-111 (path from session_id only, no timestamps), scripts/hdc_hooks.py:226-227; README.md:8 describes persistence across compaction as the main value, not across resumes",
+    "confidence": "low"
+  },
+  {
+    "id": "F19",
+    "component": "test/run_tests.sh and README.md test claim",
+    "problem": "The suite fabricates its own payloads and never sees a real one, so it cannot detect a renamed Claude Code field, which is exactly what the README says to run it for. The fixtures also differ from real payloads: the Edit case uses `old_str`/`new_str` (real fields are `old_string`/`new_string`), the failure case uses a bare pytest `E` line rather than Bash failure text, and no fixture carries `tool_use_id`, `is_interrupt`, `agent_id` or `scratchpad_dir`. Six of the fifteen assertions expect empty output, which a crashed script also produces.",
+    "scenario": "Claude Code renames `error` to `failure_message`. The user runs ./test/run_tests.sh as instructed after the update; all fifteen assertions pass because the fixtures still say `error`. In production the reminder never fires again.",
+    "consequence": "The test gives false assurance about the one failure mode (schema drift) the plugin's own rules single out as worst; interrupts, timeouts, subagents, concurrency and signature accumulation are untested.",
+    "evidence": "test/run_tests.sh:17-26 (hand-written payloads), test/run_tests.sh:24 (old_str/new_str), test/run_tests.sh:28-30,36,44-45 (EMPTY assertions), README.md:26, docs/CLAUDE.md:19",
+    "confidence": "high"
+  },
+  {
+    "id": "F20",
+    "component": "scripts/hdc_hooks.py gate deny reason; README.md escape hatch",
+    "problem": "The deny reason itself instructs the agent to 'vary the call in a way that reflects that judgement' when it believes the failure is transient, and the key is an exact-content hash, so any cosmetic variation (`-q`, `./x.py`, `2>&1`, a trailing comment, `cd . &&`) starts a fresh count of zero. The control thus documents its own bypass in the message an agent reads at the moment it most wants through, and relies on the agent to 'say so to the user' (an honour-system request) to keep the hatch honest.",
+    "scenario": "`pytest x.py` is denied. Claude writes 'this may be transient' and runs `pytest ./x.py`. New key, allowed; it fails; `pytest -q x.py`; allowed; and so on. The loop the gate exists to stop continues with a changing surface, and the reminder (keyed by error signature) may be the only thing that still notices.",
+    "consequence": "The blocking control degrades to an advisory one against an agent under pressure; the README's framing of this as a 'deliberate escape hatch' makes the degradation official.",
+    "evidence": "scripts/hdc_hooks.py:236-238, scripts/hdc_hooks.py:67-82, README.md:34, docs/CLAUDE.md:29 (claims it cannot be talked past)",
+    "confidence": "high"
+  }
+]
