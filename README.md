@@ -47,7 +47,7 @@ Five rounds of adversarial review by a separate Claude Code session, each run ag
 
     python3 test/run_tests.py
 
-69 tests: hooks simulated tool call by tool call the way Claude Code does (gate, real command, then success or failure), and the report run against a captured transcript. Fixtures in `test/fixtures/` are captured payloads from a real session; re-capture after a Claude Code upgrade, since a renamed field fails as silent always-pass.
+74 tests: hooks simulated tool call by tool call the way Claude Code does (gate, real command, then success or failure), and the report run against a captured transcript. Fixtures in `test/fixtures/` are captured payloads from a real session; re-capture after a Claude Code upgrade, since a renamed field fails as silent always-pass.
 
 ## Layout
 

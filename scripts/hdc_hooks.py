@@ -72,9 +72,8 @@ import sys
 import stat
 import tempfile
 import time
-import traceback
 
-VERSION = "0.6.0"        # keep equal to .claude-plugin/plugin.json
+VERSION = "0.6.1"        # keep equal to .claude-plugin/plugin.json
 SCHEMA = 1               # HDC_EVENTS record format
 THRESHOLD = 2            # identical failures before the reminder and gate act
 MAX_FINGERPRINT = 160    # chars of normalised error kept for hashing
@@ -91,7 +90,7 @@ SKIP_LINES = {"traceback (most recent call last):"}
 # transcripts. Defined once here so the two cannot drift.
 DENY_PREFIX = "Blocked by the Hierarchy of Defect Controls gate: "
 DENY_RE = re.compile(re.escape(DENY_PREFIX)
-                     + r'(?P<desc>.+?) has failed (?P<n>\d+) times with the same error \("(?P<sig>.*?)"\)', re.S)
+                     + r'(?P<desc>.+?) has failed (?P<n>\d+) times with the same error \("(?P<sig>.*)"\) and ', re.S)
 REMINDER_RE = re.compile(r'^The (?P<tool>\S+) tool has now failed (?P<n>\d+) times in this session '
                          r'with the same signature: "(?P<sig>.*)"\. The Hierarchy', re.S)
 NOOP_TEXT = "reported success but its target is byte-identical"
@@ -378,9 +377,10 @@ MAX_EVENT = 4096         # bytes per record; one os.write, so appends do not int
 
 def log_event(kind: str, session_id=None, **fields) -> None:
     """Append one Tier 4 record to $HDC_EVENTS. Opt-in, best-effort, and
-    never able to block: the path must be absolute and a regular file (or
-    not exist yet), and the open is non-blocking, so a FIFO or a stale
-    mount cannot hold a hook until its timeout."""
+    The path must be absolute and a regular file, not a symlink, or not
+    exist yet. A FIFO or device is refused; O_NONBLOCK and O_NOFOLLOW only
+    back that check up against a swap between the check and the open. A
+    hung filesystem can still block it, as it can the state file."""
     path = os.environ.get("HDC_EVENTS")
     if not path:
         return
@@ -388,7 +388,7 @@ def log_event(kind: str, session_id=None, **fields) -> None:
         if not os.path.isabs(path):
             return
         try:
-            if not stat.S_ISREG(os.stat(path).st_mode):
+            if not stat.S_ISREG(os.lstat(path).st_mode):
                 return
         except FileNotFoundError:
             pass
@@ -399,7 +399,8 @@ def log_event(kind: str, session_id=None, **fields) -> None:
         line = (json.dumps(rec, separators=(",", ":")) + "\n").encode("utf-8")
         if len(line) > MAX_EVENT:
             return
-        fd = os.open(path, os.O_WRONLY | os.O_APPEND | os.O_CREAT | os.O_NONBLOCK, 0o600)
+        fd = os.open(path, os.O_WRONLY | os.O_APPEND | os.O_CREAT | os.O_NONBLOCK | os.O_NOFOLLOW,
+                     0o600)
         try:
             os.write(fd, line)
         finally:
@@ -426,9 +427,11 @@ def _sid_of(path: str) -> str:
     return name[len("hdc-state-"):-len(".json")] if name.startswith("hdc-state-") else name
 
 
-def peek_state(path: str) -> dict:
+def peek_state(path: str, log: bool = True) -> dict:
     """Unlocked read. Writers replace the file atomically, so a reader sees
-    a complete file; it may be a moment stale, which the callers tolerate."""
+    a complete file; it may be a moment stale, which the callers tolerate.
+    Only the locked read under State logs a corrupt file: it is the one that
+    rewrites it, so each corruption is recorded once."""
     try:
         with open(path, "r", encoding="utf-8") as fh:
             data = json.load(fh)
@@ -436,9 +439,11 @@ def peek_state(path: str) -> dict:
             for k, v in _fresh().items():
                 data.setdefault(k, v)
             return data
-        log_event("state_corrupt", _sid_of(path))
+        if log:
+            log_event("state_corrupt", _sid_of(path))
     except ValueError:
-        log_event("state_corrupt", _sid_of(path))
+        if log:
+            log_event("state_corrupt", _sid_of(path))
     except OSError:
         pass
     return _fresh()
@@ -531,7 +536,7 @@ def mode_gate(payload: dict) -> None:
     ck = canonical_call(tool, tool_input)
 
     # Cheap unlocked look to decide whether any git work is needed (R4).
-    snap = peek_state(path)
+    snap = peek_state(path, log=False)
     call = agent_of(snap, agent_key(payload))["calls"].get(ck)
     armed = bool(call) and int(call.get("count", 0)) >= THRESHOLD
     plan = noop_plan(tool, tool_input, cwd) if tuid else None
@@ -646,6 +651,8 @@ def main() -> int:
     except Exception as exc:  # noqa: BLE001
         # Still exit 0 and say nothing to the session; the record is the
         # only trace. Innermost frame in this file, not in the stdlib.
+        # Imported here: at module level it costs ~12 ms on every hook run.
+        import traceback
         here = [f for f in traceback.extract_tb(exc.__traceback__)
                 if os.path.abspath(f.filename) == os.path.abspath(__file__)]
         log_event("hook_exception", payload.get("session_id") if isinstance(payload, dict) else None,

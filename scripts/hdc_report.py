@@ -98,7 +98,7 @@ def scan(path: str, since=None) -> dict:
     """Counts for one transcript. Events are grouped into episodes: one
     loop (same signature, or same call for a no-op) within one user turn."""
     out = {"tool_calls": 0, "tool_errors": 0, "denies": 0, "reminders": 0, "noops": 0,
-           "cleared_by_user": 0, "malformed": 0, "episodes": {}, "seen": False}
+           "cleared_by_user": 0, "malformed": 0, "episodes": {}, "seen": False, "versions": set()}
     uses = {}            # tool_use_id -> call key
     denied = {}          # call key -> turn of its last deny
     turn = 0
@@ -124,6 +124,8 @@ def scan(path: str, since=None) -> dict:
             ts = e.get("timestamp")
             if since and isinstance(ts, str) and ts < since:
                 continue
+            if isinstance(e.get("version"), str):
+                out["versions"].add(e["version"])
             kind = e.get("type")
             msg = e.get("message") if isinstance(e.get("message"), dict) else {}
             content = msg.get("content")
@@ -229,10 +231,15 @@ def read_events(path: str, since=None) -> dict:
 
 # --------------------------------------------------------------- report
 
+def version_key(v: str):
+    return [int(x) if x.isdigit() else 0 for x in re.split(r"[.-]", v)]
+
+
 def build(project_dirs, since=None, events_path=None) -> dict:
     r = {"projects": len(project_dirs), "sessions": 0, "subagents": 0, "tool_calls": 0,
          "tool_errors": 0, "denies": 0, "reminders": 0, "noops": 0, "cleared_by_user": 0,
          "malformed": 0, "episodes": 0, "max_depth": 0, "past_gate": 0}
+    versions = set()
     for d in project_dirs:
         for path, sub in transcripts(d):
             s = scan(path, since)
@@ -240,12 +247,14 @@ def build(project_dirs, since=None, events_path=None) -> dict:
             if not s["seen"]:
                 continue
             r["subagents" if sub else "sessions"] += 1
+            versions |= s["versions"]
             for k in ("tool_calls", "tool_errors", "denies", "reminders", "noops", "cleared_by_user"):
                 r[k] += s[k]
             for ep in s["episodes"].values():
                 r["episodes"] += 1
                 r["max_depth"] = max(r["max_depth"], ep["events"])
                 r["past_gate"] += ep["denies"] >= 2
+    r["claude_code_versions"] = sorted(versions, key=version_key)
     n, calls = r["episodes"], r["tool_calls"]
     if n >= MIN_RATE_N and calls:
         lo, hi = poisson_ci(n)
@@ -260,6 +269,9 @@ def render(r, label, since) -> str:
     L = [f"HDC indicators: {label}" + (f", since {since}" if since else "")]
     L.append(f"Observed: {r['sessions']} sessions, {r['subagents']} subagent transcripts, "
              f"{r['tool_calls']:,} tool calls ({r['tool_errors']:,} errors)")
+    if r["claude_code_versions"]:
+        L.append(f"Claude Code versions: {', '.join(r['claude_code_versions'])} "
+                 "(the format is undocumented; a new version may need a new fixture)")
     if r["malformed"]:
         L.append(f"Malformed transcript lines skipped: {r['malformed']}")
     L.append("")

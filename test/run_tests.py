@@ -18,6 +18,7 @@ import tempfile
 import threading
 import time
 import unittest
+from unittest import mock
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 SCRIPT = os.path.join(HERE, "..", "scripts", "hdc_hooks.py")
@@ -631,6 +632,7 @@ class NoGitFallback(Base):
 
 REPORT = os.path.join(HERE, "..", "scripts", "hdc_report.py")
 sys.path.insert(0, os.path.join(HERE, "..", "scripts"))
+sys.dont_write_bytecode = True    # no scripts/__pycache__ from these imports (round 6)
 import hdc_hooks  # noqa: E402
 import hdc_report  # noqa: E402
 
@@ -707,6 +709,7 @@ class Report(unittest.TestCase):
         d = self.data()
         self.assertEqual((d["sessions"], d["tool_calls"], d["denies"], d["reminders"], d["noops"]),
                          (1, 7, 2, 2, 2))
+        self.assertEqual(d["claude_code_versions"], ["2.1.270"])
         self.assertEqual((d["episodes"], d["max_depth"], d["past_gate"], d["cleared_by_user"]),
                          (3, 3, 0, 1))
 
@@ -725,19 +728,19 @@ class Report(unittest.TestCase):
         """Found against real transcripts: a Bash call that printed a
         captured deny message was counted as a deny."""
         self.put([prompt_entry(), tool_use_entry(), deny_entry(hdc_hooks.DENY_PREFIX + "Bash(x) has failed 2 times "
-                                             'with the same error ("e")', is_error=False)])
+                                             'with the same error ("e") and nothing has changed', is_error=False)])
         self.assertEqual(self.data()["denies"], 0)
 
     def test_task_notification_is_not_a_turn(self):
         sig = 'with the same signature: "exit 1:". The Hierarchy'
         self.put([prompt_entry(), tool_use_entry(), context_entry(f"The Bash tool has now failed 2 times in this session {sig}"),
                   prompt_entry("<task-notification>\n<task-id>x</task-id>"),
-                  deny_entry(hdc_hooks.DENY_PREFIX + 'Bash(false) has failed 2 times with the same error ("exit 1:")')])
+                  deny_entry(hdc_hooks.DENY_PREFIX + 'Bash(false) has failed 2 times with the same error ("exit 1:") and nothing has changed')])
         d = self.data()
         self.assertEqual((d["episodes"], d["max_depth"]), (1, 2))
 
     def test_repeated_denies_continue_past_the_gate(self):
-        deny = deny_entry(hdc_hooks.DENY_PREFIX + 'Bash(false) has failed 2 times with the same error ("exit 1:")')
+        deny = deny_entry(hdc_hooks.DENY_PREFIX + 'Bash(false) has failed 2 times with the same error ("exit 1:") and nothing has changed')
         self.put([prompt_entry(), tool_use_entry(), deny, deny, prompt_entry(), deny])
         d = self.data()
         self.assertEqual((d["episodes"], d["max_depth"], d["past_gate"]), (2, 2, 1))
@@ -808,6 +811,27 @@ class ReportDrift(Base):
     """The report parses the hooks' own messages back out of transcripts.
     Feed it what the hooks actually emit today."""
 
+    def test_r8_signature_containing_quoted_call_is_one_episode(self):
+        """Round 6 R8: DENY_RE stopped the signature at the first `")`, so
+        a reminder and its deny landed in different episodes."""
+        self.write("t.sh", 'echo \'ValueError("bad input") raised by foo\' >&2; exit 1\n')
+        self.s.run_bash("sh t.sh")
+        _, reminder = self.s.run_bash("sh t.sh")
+        deny = json.loads(hook("gate", self.s.pre("sh t.sh")))["hookSpecificOutput"]["permissionDecisionReason"]
+        sig = hdc_hooks.REMINDER_RE.match(reminder).group("sig")
+        self.assertIn('("bad input")', sig)
+        self.assertEqual(hdc_hooks.DENY_RE.match(deny).group("sig"), sig)
+        root = tempfile.mkdtemp(prefix="hdc-projects-")
+        try:
+            os.makedirs(os.path.join(root, "p"))
+            with open(os.path.join(root, "p", "s.jsonl"), "w") as fh:
+                for e in (prompt_entry(), tool_use_entry(), context_entry(reminder), deny_entry(deny)):
+                    fh.write(json.dumps(e) + "\n")
+            d = hdc_report.build([os.path.join(root, "p")])
+        finally:
+            shutil.rmtree(root, ignore_errors=True)
+        self.assertEqual((d["episodes"], d["max_depth"]), (1, 2))
+
     def test_current_messages_are_parsed(self):
         self.write("t.sh", "exit 1\n")
         self.s.run_bash("sh t.sh")
@@ -868,6 +892,15 @@ class Tier4(Base):
         self.assertEqual(self.broken_success(env=env), "")
         self.assertEqual(self.records(), [])
 
+    def test_r6_unset_means_no_file_is_opened_anywhere(self):
+        """Round 6 F4: the test above only looked at its own path, so a
+        mutant that logged to a default path passed it."""
+        with mock.patch.dict(os.environ, {}, clear=False):
+            os.environ.pop("HDC_EVENTS", None)
+            with mock.patch("os.open") as o, mock.patch("builtins.open") as b:
+                hdc_hooks.log_event("hook_exception", "s")
+        self.assertFalse(o.called or b.called)
+
     def test_swallowed_exception_is_recorded(self):
         self.assertEqual(self.broken_success(), "")       # session still sees nothing
         (r,) = self.records()
@@ -882,6 +915,9 @@ class Tier4(Base):
     def test_corrupt_state_is_recorded_and_healed(self):
         with open(os.path.join(self.scratch, f"hdc-state-{self.s.sid}.json"), "w") as fh:
             fh.write("{truncated")
+        for _ in range(3):                                # round 6 R10: unlocked peeks stay quiet
+            hook("gate", self.s.pre(None, tool="Read", tool_input={"file_path": "/x"}))
+        self.assertEqual(self.records(), [])
         self.s.reset()
         self.assertEqual([(r["kind"], r["session_id"]) for r in self.records()],
                          [("state_corrupt", self.s.sid)])
@@ -895,6 +931,36 @@ class Tier4(Base):
         self.assertLess(time.time() - t, 2)
         self.arm()
         self.assertEqual(self.s.run_bash("sh t.sh"), ("DENIED", ""))
+
+    def test_r6_fifo_with_a_reader_is_still_refused(self):
+        """Round 6 F4: with no reader, O_NONBLOCK alone also refuses a FIFO,
+        so the test above cannot see the S_ISREG check. With a reader the
+        open would succeed; only the check stops the write."""
+        os.mkfifo(self.events)
+        rd = os.open(self.events, os.O_RDONLY | os.O_NONBLOCK)
+        try:
+            self.broken_success()
+            try:
+                got = os.read(rd, 65536)
+            except BlockingIOError:
+                got = b""
+        finally:
+            os.close(rd)
+        self.assertEqual(got, b"")
+
+    def test_r11_symlinks_are_refused(self):
+        target = os.path.join(self.scratch, "target.txt")
+        with open(target, "w") as fh:
+            fh.write("keep\n")
+        os.symlink(target, self.events)
+        self.broken_success()
+        with open(target) as fh:
+            self.assertEqual(fh.read(), "keep\n")
+        os.remove(self.events)
+        dangling = os.path.join(self.scratch, "never-created.txt")
+        os.symlink(dangling, self.events)
+        self.broken_success()
+        self.assertFalse(os.path.exists(dangling))
 
     def test_relative_path_ignored(self):
         env = dict(os.environ, HDC_EVENTS="events.jsonl")
@@ -915,6 +981,13 @@ class Tier4(Base):
         self.s.run_bash("sh t.sh")
         self.s.reset()
         self.assertEqual(self.records(), [])
+
+    def test_r9_traceback_not_imported_on_the_hot_path(self):
+        """Round 6 R9: a module-level import cost ~12 ms per hook run."""
+        r = subprocess.run([PY, "-B", "-c", "import sys; sys.path.insert(0, sys.argv[1]); import hdc_hooks; "
+                            "print('traceback' in sys.modules)", os.path.join(HERE, "..", "scripts")],
+                           capture_output=True, text=True, check=True)
+        self.assertEqual(r.stdout.strip(), "False")
 
     def test_version_matches_manifests(self):
         root = os.path.join(HERE, "..", ".claude-plugin")
