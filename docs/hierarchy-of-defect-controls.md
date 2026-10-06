@@ -95,3 +95,4 @@ The ladder applies to an agent's own mistakes the same way. When a coding agent 
 - **Blameless postmortems** (Dekker, Allspaw, Google SRE): the culture that discourages "be more careful" as a remediation
 - **Secure by Design** (CISA, OWASP): the same layering applied to vulnerabilities
 - **Swiss cheese model** (Reason): often confused with this; it explains how failures pass through layers rather than ranking which layers to build
+- **Layer of Protection Analysis** (CCPS): which layers deserve credit at all. Its qualitative half, independence above all, is applied to agent work in [protection-layers.md](protection-layers.md)

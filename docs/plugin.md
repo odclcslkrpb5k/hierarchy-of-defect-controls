@@ -1,6 +1,6 @@
 # Plugin reference
 
-Controls for the [Hierarchy of Defect Controls](hierarchy-of-defect-controls.md), each labelled at the rung it actually occupies. v0.5.1 is the release the round-5 adversarial review passed, plus its should-fix items. v0.6.0 added indicators, which are not controls and change no hook decision; the round-6 review passed it, and v0.6.1 is its should-fix items. Changes are listed at the end.
+Controls for the [Hierarchy of Defect Controls](hierarchy-of-defect-controls.md), each labelled at the rung it actually occupies. v0.5.1 is the release the round-5 adversarial review passed, plus its should-fix items. v0.6.0 added indicators, which are not controls and change no hook decision; the round-6 review passed it, and v0.6.1 is its should-fix items. v0.7.0 changes no hook behaviour: it adds the independent-protection-layer doc and two rules. Changes are listed at the end.
 
 | Component | Rung | What it does |
 |---|---|---|
@@ -11,6 +11,8 @@ Controls for the [Hierarchy of Defect Controls](hierarchy-of-defect-controls.md)
 | `skills/hierarchy-of-defect-controls/SKILL.md` | **Administer** | The rules. Weaker than a project `CLAUDE.md`, since it loads only when the model matches it. |
 | `scripts/hdc_report.py` | indicator, not a control | Read-only report over Claude Code transcripts: Tier 3 demands on the controls (denies, reminders, no-ops) grouped into episodes, exposure in tool calls, and the gate's cost in user messages. Not a hook; nothing it computes reaches the model. See [indicators](indicators.md). |
 | Tier 4 log (`HDC_EVENTS`) | indicator, not a control | Opt-in. A hook exception that would otherwise be swallowed silently, or a corrupt state file, appends one record. Off by default; refuses symlinks and non-regular files. |
+
+None of these is an independent protection layer: the gate is defeated by trivial variation and its state file is writable by the agent it constrains, and the rest are Administer or indicators. See [protection-layers.md](protection-layers.md#this-plugin-honestly). For guarding the checks an agent could switch off, see its [access-security section](protection-layers.md#access-security-deny-rules); that is a Claude Code permission setting, not part of the plugin, since plugins cannot ship permission rules.
 
 ### What each control's indicators can show
 

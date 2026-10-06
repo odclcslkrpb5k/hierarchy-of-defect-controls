@@ -21,6 +21,8 @@ When proposing a fix, remediation, or postmortem action item, or when correcting
 - Administer and Protect fixes are legitimate when chosen deliberately. Flag them; do not refuse them.
 - When a codebase relies on review to catch the same bug class repeatedly, say so and name the Engineer control that is missing.
 - Treat the rung as a property of the fix, not a judgement of the author.
+- Before saying a change is verified, run the checks that existed before it, unmodified, and report their result apart from tests you wrote. A test whose expected answer came from your own reading of the problem shares that reading's mistakes.
+- Do not weaken or disable a check (a skip marker, a looser assertion, a config or workflow edit) so that your own change passes, unless the task asks for it, and name every check you changed. If a check looks wrong, say so instead of changing it.
 
 ## Your own repeated mistakes
 

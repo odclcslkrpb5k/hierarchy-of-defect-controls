@@ -17,6 +17,8 @@ When proposing a fix, remediation, or postmortem action item, or when correcting
 - When a codebase relies on review to catch the same bug class repeatedly, say so and name the Engineer control that is missing.
 - A control for a repeated mistake must be specific to that pattern and deterministic. A generic self-review, a prose-reading gate, or a check that fires on acknowledgement of a mistake is not an Engineer control; it is Administer wearing a gate, and a gate on disclosure prices honesty.
 - Any hook or check you add must be exercised against a real payload before it is relied on. A check that reads a field the payload does not contain fails as silent always-pass, which is worse than no check.
+- Before saying a change is verified, run the checks that existed before it, unmodified, and report their result apart from tests you wrote. A test whose expected answer came from your own reading of the problem shares that reading's mistakes.
+- Do not weaken or disable a check (a skip marker, a looser assertion, a config or workflow edit) so that your own change passes, unless the task asks for it, and name every check you changed. If a check looks wrong, say so instead of changing it.
 - A narrow gate built from one session's mistake carries a false-positive cost on unrelated work. Scope it as tightly as the pattern allows and say what would justify removing it. Gate accumulation is height-seeking in slow motion.
 - Treat the rung as a property of the fix, not a judgement of the author.
 

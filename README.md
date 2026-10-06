@@ -27,6 +27,8 @@ Plus indicators, an analog of the process-safety standard API RP 754: `python3 s
 
 There is deliberately no hook that reads Claude's prose for admissions of a repeated mistake. That design gates on disclosure, which prices honesty; see the reviews.
 
+Which checks count as independent layers for an agent's change, and why tests the agent wrote from its own reading of the problem do not: [`docs/protection-layers.md`](docs/protection-layers.md), the qualitative half of Layer of Protection Analysis, with a permission-rule setup tested against a live session.
+
 Full component table, gate rules, tuning and known gaps: [`docs/plugin.md`](docs/plugin.md).
 
 ## The ladder
@@ -55,7 +57,7 @@ Five rounds of adversarial review by a separate Claude Code session, each run ag
     hooks/hooks.json    four hooks wired to scripts/hdc_hooks.py
     scripts/            hdc_hooks.py (the hooks) and hdc_report.py (indicators); no dependencies
     skills/             the rules as a Claude Code skill
-    docs/               framework, CLAUDE.md, plugin reference, indicators, the SVG, reviews
+    docs/               framework, CLAUDE.md, plugin reference, indicators, protection layers, evidence, the SVG, reviews
     test/               test suite and captured fixtures
 
 ## License

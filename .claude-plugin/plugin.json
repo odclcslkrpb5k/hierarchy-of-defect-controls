@@ -1,6 +1,6 @@
 {
   "name": "hierarchy-of-defect-controls",
-  "version": "0.6.1",
+  "version": "0.7.0",
   "description": "Hierarchy of Defect Controls: a deterministic PreToolUse gate on unchanged identical retries, a repeat-failure reminder, a no-op in-place edit detector, and the rules as a skill.",
   "keywords": ["hooks", "postmortem", "quality", "safety"]
 }
