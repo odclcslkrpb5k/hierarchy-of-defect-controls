@@ -1,6 +1,6 @@
 # Permission rules against writes to a check file: observed
 
-Claude Code 2.1.289, 2026-10-06. Evidence for the access-security section of [protection-layers.md](../protection-layers.md). Re-run after a Claude Code upgrade; nothing here is guaranteed by documentation.
+Claude Code 2.1.289, 2026-10-06. Evidence for the access-security section of [protection-layers.md](../protection-layers.md). Re-run after a Claude Code upgrade; nothing here is guaranteed by documentation. The six forms below were too few: [review 07](../reviews/07-v0.7.0.md) (R12) found about fifteen more that a deny rule does not stop, and [sandbox-2.1.291.md](sandbox-2.1.291.md) tests the sandbox against them.
 
 ## Method
 

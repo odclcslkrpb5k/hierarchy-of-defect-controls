@@ -27,7 +27,7 @@ Plus indicators, an analog of the process-safety standard API RP 754: `python3 s
 
 There is deliberately no hook that reads Claude's prose for admissions of a repeated mistake. That design gates on disclosure, which prices honesty; see the reviews.
 
-Which checks count as independent layers for an agent's change, and why tests the agent wrote from its own reading of the problem do not: [`docs/protection-layers.md`](docs/protection-layers.md), the qualitative half of Layer of Protection Analysis, with a permission-rule setup tested against a live session.
+Which checks count as independent layers for an agent's change, and why tests the agent wrote from its own reading of the problem do not: [`docs/protection-layers.md`](docs/protection-layers.md), the qualitative half of Layer of Protection Analysis. It includes live tests of what Claude Code's permission rules and sandbox can and cannot stop an agent doing to a CI workflow.
 
 Full component table, gate rules, tuning and known gaps: [`docs/plugin.md`](docs/plugin.md).
 

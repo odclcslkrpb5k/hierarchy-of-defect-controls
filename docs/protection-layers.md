@@ -4,12 +4,12 @@ The ladder ranks a control by its mechanism. The [indicators](indicators.md) cou
 
 ## The original
 
-LOPA (CCPS, 2001) is semi-quantitative. For one scenario, an initiating event leading to a consequence, it multiplies the event's frequency by each protection layer's probability of failure on demand and compares the result with a tolerable frequency. Only some safeguards earn credit. CCPS's guidelines on initiating events and independent protection layers (2015) list the core attributes an independent protection layer (IPL) must have:
+LOPA (CCPS, 2001) sits between a qualitative hazard review and a full quantitative risk analysis; later CCPS texts call it semi-quantitative. For one scenario, an initiating event leading to a consequence, it multiplies the event's frequency by each protection layer's probability of failure on demand and compares the result with a tolerable frequency. Only some safeguards earn credit. CCPS's guidelines on initiating events and independent protection layers (2015) list the core attributes an independent protection layer (IPL) must have:
 
 - **Independence**: of the initiating event, and of every other layer credited in the same scenario.
 - **Functionality**: it can actually stop this consequence, in time.
-- **Integrity**: the risk reduction it can be credited with, as a probability of failure on demand.
-- **Reliability**: it works as designed when called on.
+- **Integrity**: the risk reduction reasonably achievable by the layer, given its design and management. In LOPA this is what the failure probability expresses.
+- **Reliability**: the probability that it operates to its specification for a specified period.
 - **Auditability**: its function can be inspected and tested.
 - **Access security**: it cannot be changed or bypassed without authorisation.
 - **Management of change**: changes to it are reviewed.
@@ -34,8 +34,8 @@ A check is independent of scenario 1 if its oracle, the expected answer it compa
 | Check | Independent of the agent's reading? | Why |
 |---|---|---|
 | Tests that existed before the change and that it does not modify | Yes | The oracle predates the change. |
-| Type checker or linter whose configuration the change does not touch | Yes, for the defect classes it covers | The oracle is the language or the rule set. |
-| A test checked against captured real output | Yes | The oracle is the system's actual behaviour. This is the typed accessor validated against a fixture in [CLAUDE.md](CLAUDE.md). |
+| Type checker or linter whose configuration the change does not touch, and in whose scope the change adds no inline suppression (`# type: ignore`, `# noqa`, `eslint-disable`, `# pragma: no cover`) | Yes, for the defect classes it covers | The oracle is the language or the rule set. A suppression in source silences it as surely as a config edit. |
+| A test checked against output captured before the change, or from a system the agent did not write | Yes | The oracle is the system's actual behaviour. This is the typed accessor validated against a fixture in [CLAUDE.md](CLAUDE.md). A snapshot generated from the agent's new code is not this; it captures the reading under test. |
 | A spec, acceptance test or review from someone who has not seen the author's framing | Yes | It comes from a different reading. |
 | A test the agent wrote from its own understanding, before or after the code | No | The same reading produced the code and the expected answer. Writing the test first catches slips, where the code fails to do what the agent meant; it cannot catch a misreading of what was wanted. |
 | The agent's review of its own diff | No | It is the same attention that made the mistake. |
@@ -44,7 +44,7 @@ A check is independent of scenario 1 if its oracle, the expected answer it compa
 
 ## Common mode: one workflow file
 
-Lint, types and tests usually run from one CI workflow, and one edit to that file silences all three: `|| true`, a deleted job, `continue-on-error`. For independence they are therefore one layer, and the workflow file is the common mode. Branch protection can make a named check required, but a `pull_request` workflow runs from the pull request's own copy of the file. A required check is an IPL only if the workflow file is guarded as well, for example by required review from code owners covering `.github/workflows/`, or by the deny rule below.
+Lint, types and tests usually run from one CI workflow, and one edit to that file silences all three: `|| true`, a deleted job, `continue-on-error`, or `if: false`. A required job skipped by an `if:` condition reports success, so it does not even block the merge. For independence they are therefore one layer, and the workflow file is the common mode. Branch protection can make a named check required, but a `pull_request` workflow runs from the pull request's own copy of the file. A required check is an IPL only if changes to the workflow file are reviewed at a boundary the agent cannot reach; see [access security](#access-security-only-the-merge-boundary-qualifies).
 
 ## The ladder and IPLs
 
@@ -57,7 +57,7 @@ IPL status does not re-rank the ladder, and it is no reason to refuse an Adminis
 
 ## This plugin, honestly
 
-None of the plugin's controls is an IPL:
+None of the plugin's controls is an IPL, and neither are the local settings recommended below:
 
 | Control | IPL? | Why |
 |---|---|---|
@@ -66,49 +66,62 @@ None of the plugin's controls is an IPL:
 | Reminder | No | It works only if the agent acts on it (Administer). |
 | Rules (`SKILL.md`, `CLAUDE.md`) | No | Administer. |
 | Indicators | Not protection | They provide auditability for the controls. |
+| Deny rule on a check file | No | Trivial variation defeats it, the same test the gate fails: `sh -c` around a blocked command gets through. |
+| Deny rule plus sandbox | No | The working tree is protected, but the agent can still commit a weakened file through git's index. |
 
-## Access security: deny rules
+## Access security: only the merge boundary qualifies
 
-An agent that can edit a check can switch it off, so scenario 2 needs a control the agent cannot talk its way past. Claude Code's permission rules are enforced outside the model. Against writes to a workflow file, Claude Code 2.1.289 in `-p` was observed to do the following ([evidence](evidence/permission-rules-2.1.289.md)):
+An agent that can edit a check can switch it off, so scenario 2 needs a guard the agent cannot get past. Two local guards were tested in `-p` sessions; neither is one.
 
-| Write | `deny` rule | `ask` rule |
-|---|---|---|
-| Edit, Write, MultiEdit tools | blocked | blocked in `-p` (nobody to ask) |
-| `echo >>`, `sed -i`, `rm`, `mv` | blocked | not blocked by the rule |
-| `python3 -c "open(...)"` | **not blocked** | not blocked by the rule |
+**A deny rule** (`permissions.deny`, `Edit(/.github/workflows/**)`; [2.1.289](evidence/permission-rules-2.1.289.md), [review 07](reviews/07-v0.7.0.md) on 2.1.291):
 
-Use `deny`. An `ask` rule covers only the edit tools, so an agent with Bash can make the same change through the shell. For the project, in `.claude/settings.json`:
+- **Blocks:** the Edit and Write tools; redirections, including a here-doc into `>>`; and the commands Claude Code recognises as file commands: `sed -i`, `tee`, `cp`, `rm`, `mv`.
+- **Does not block:** any utility or wrapper it does not recognise, for example `sh -c "…"`, `python3`, `perl -pi`, `dd`, `install`, `truncate`, `ln`, `git rm`, `git mv`, `git checkout --`, `find -delete`, `xargs rm`, `git apply`.
+- **An `ask` rule** stops only the edit tools, and in `-p` it means deny.
+
+**The deny rule plus the sandbox** (`sandbox.enabled`, `failIfUnavailable`, `allowUnsandboxedCommands: false`, the directory in `filesystem.denyWrite`; [2.1.291, Linux](evidence/sandbox-2.1.291.md)):
+
+- **Blocks:** every working-tree route tried, including all of the above, and an explicit request to run outside the sandbox.
+- **Does not block:** a commit. `git checkout HEAD~1 -- <workflow>` failed on the file but staged the old version, and `git commit` committed it. `HEAD` held the weakened workflow while the file on disk still showed the strong one. Git's index lives in `.git`, which a sandboxed agent must be able to write in order to use git at all.
+
+**What qualifies** is review where the agent cannot reach it: required review from code owners for `.github/workflows/` (and any other check configuration), with "Do not allow bypassing the above settings" enabled so administrators cannot skip it, and with the agent holding no credentials that could approve or bypass. Pull request authors cannot approve their own pull requests. This is an Engineer gate (branch protection) enforcing an Administer act (a review), and it earns IPL credit for independence only if the reviewer reads the workflow diff itself rather than the author's summary of it.
+
+**The local guards are still worth having**, as narrow Engineer controls that close the direct routes and leave only a deliberate one:
 
 ```json
 {
-  "permissions": {
-    "deny": ["Edit(/.github/workflows/**)"]
+  "permissions": { "deny": ["Edit(/.github/workflows/**)"] },
+  "sandbox": {
+    "enabled": true,
+    "failIfUnavailable": true,
+    "allowUnsandboxedCommands": false,
+    "filesystem": { "denyWrite": ["./.github/workflows"] }
   }
 }
 ```
 
-Add `Edit(...)` entries for the other files your checks live in, chosen deliberately, for example `pytest.ini`, `tox.ini`, `.coveragerc`, `mypy.ini`, `ruff.toml`, `eslint.config.*`. With a deny rule you edit those files yourself. If you routinely have an agent maintain them, a deny rule will be removed under pressure, and required code-owner review is the better guard.
-
-- **Rung:** Engineer, an interlock outside the model. Adopting it is opt-in, which is Administer. The next rung up is Eliminate: checks defined and enforced outside the repository the agent works in. That is not available to most projects.
-- **Scope (documented, not observed here):**
-  - A `/`-anchored pattern in project settings is relative to the project root.
-  - Project settings load from the directory the session starts in, so a session started in a subdirectory does not get them. A user-level rule in `~/.claude/settings.json`, `Edit(**/.github/workflows/**)`, covers every directory.
-  - Claude Code already guards some files without any rule: `.claude/`, `.pre-commit-config.yaml`, `.husky/`, `lefthook.yml`, `pyrightconfig.json`, `.mcp.json`. Edits to them are prompted in the default and acceptEdits modes, go to the classifier in auto mode, are denied in dontAsk mode and are allowed in bypassPermissions mode.
-  - `sandbox.filesystem.denyWrite` can stop the script case at the OS level, but only with `sandbox.enabled`, and it does not cover the edit tools.
-  - See [permissions](https://code.claude.com/docs/en/permissions.md), [permission modes](https://code.claude.com/docs/en/permission-modes.md) and [sandboxing](https://code.claude.com/docs/en/sandboxing.md).
-- **When to remove it:** remove the rule when the files it guards are guarded elsewhere (code-owner review, rules enforced outside the repository), or when you are the one it keeps stopping.
+- **The deny rule alone** costs nothing else. It stops the edit tools, which are the route an agent takes first.
+- **The sandbox changes the whole session.** Shell commands lose network access except to domains you allow, and can write only inside the project and the temp directory. Sandboxed commands also run without a permission prompt by default (`autoAllowBashIfSandboxed`). Enable it for its own sake, not for this file alone.
+- **Rung:** Engineer, interlocks outside the model. Adopting them is opt-in, which is Administer. The next rung up is Eliminate, meaning checks defined and enforced outside the repository the agent works in, which is not available to most projects.
+- **Scope:**
+  - **Observed.** In project settings, a `/`-anchored permission pattern is relative to the project root, and a session started in a subdirectory does not load the project's `.claude/settings.json` at all. For a user-level rule in `~/.claude/settings.json` that applies everywhere, use `Edit(//**/.github/workflows/**)`; a `**/` pattern does not reach parent directories. The deny rule behaves the same in auto mode.
+  - **Documented, not observed here:**
+    - `.claude/settings.local.json` loads from the git root since 2.1.211, which covers subdirectory sessions in one repository.
+    - Sandbox paths use `./` for project-relative, not `/`. On Linux, sandbox write paths containing wildcards are ignored. The sandbox needs bubblewrap on Linux and does not run on native Windows.
+    - Claude Code already guards some files without any rule: `.claude/`, `.pre-commit-config.yaml`, `.husky/`, `lefthook.yml`, `pyrightconfig.json`, `.mcp.json`. Edits to them are prompted in the default and acceptEdits modes, go to the classifier in auto mode, are denied in dontAsk mode and are allowed in bypassPermissions mode.
+  - **Sources:** [permissions](https://code.claude.com/docs/en/permissions.md), [permission modes](https://code.claude.com/docs/en/permission-modes.md), [sandboxing](https://code.claude.com/docs/en/sandboxing.md).
+- **When to remove them:** when code-owner review guards the files, or when you are the one they keep stopping. A deny rule that keeps getting in the way of legitimate maintenance will be removed under pressure anyway.
 
 ## What this does not cover
 
 - **Test files themselves:** skip and xfail markers, loosened assertions, deleted tests. The rules below ask for these to be named; nothing enforces it.
+- **Inline suppressions in source:** `# type: ignore`, `# noqa`, `eslint-disable`, `# pragma: no cover`.
 - **Generated or mixed files:** `conftest.py`, snapshot files rewritten by a test runner, and check settings inside mixed-purpose files (`pyproject.toml`, `setup.cfg`, `package.json`).
-- **Shell routes:**
-  - scripts that open files themselves;
-  - `git checkout <ref> -- <file>`, `git stash`;
-  - here-docs;
-  - `--no-verify`, `SKIP=`, `PYTEST_ADDOPTS`, and `-k`, `--deselect` or `--no-cov` on the command line.
-- **Sessions outside the rule's reach:** sessions started outside the directory that holds the project settings, and anything in bypassPermissions mode.
-- **The interactive form of all of the above:** only `-p` was observed.
+- **Commits through git's index**, under either local guard; see above.
+- **Without the sandbox, the deny rule's bypasses**, listed above.
+- **Run-time escapes:** `--no-verify`, `SKIP=`, `PYTEST_ADDOPTS`, and `-k`, `--deselect` or `--no-cov` on the command line.
+- **Sessions outside the rule's reach:** sessions started in a subdirectory without a user-level rule, and anything in bypassPermissions mode.
+- **Interactive sessions and macOS:** all observations are from `-p` on Linux.
 
 ## The rules this adds
 
@@ -116,3 +129,5 @@ Two lines in [CLAUDE.md](CLAUDE.md) and the skill, both Administer. They are wri
 
 - Before saying a change is verified, run the checks that existed before it, unmodified, and report their result apart from tests you wrote.
 - Do not weaken or disable a check so that your own change passes unless the task asks for it, and name every check you changed.
+
+In round 7's small behaviour test (Haiku, three runs per arm), neither rule caused harm, and neither had an observable effect: no arm weakened a test, and no arm ran the pre-existing suite separately. See [review 07](reviews/07-v0.7.0.md).
